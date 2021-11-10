@@ -2,10 +2,12 @@
 __pycache__/
 *.py[cod]
 *$py.class
-
+results
+runs_fine_tuning
+runs_new
 # C extensions
 *.so
-
+.idea
 # Distribution / packaging
 .Python
 build/

@@ -1,3 +1,5 @@
+import json
+
 from opt import config_parser
 from torch.utils.data import DataLoader
 
@@ -17,6 +19,7 @@ from pytorch_lightning import LightningModule, Trainer, loggers
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+
 class SL1Loss(nn.Module):
     def __init__(self, levels=3):
         super(SL1Loss, self).__init__()
@@ -28,6 +31,7 @@ class SL1Loss(nn.Module):
             mask = depth_gt > 0
         loss = self.loss(depth_pred[mask], depth_gt[mask]) * 2 ** (1 - 2)
         return loss
+
 
 class MVSSystem(LightningModule):
     def __init__(self, args):
@@ -49,10 +53,9 @@ class MVSSystem(LightningModule):
 
         dataset = dataset_dict[self.args.dataset_name]
         self.train_dataset = dataset(args, split='train')
-        self.val_dataset   = dataset(args, split='val')
+        self.val_dataset = dataset(args, split='all') # previously is val
         self.init_volume()
         self.grad_vars += list(self.volume.parameters())
-
 
     def init_volume(self):
 
@@ -98,10 +101,15 @@ class MVSSystem(LightningModule):
             self.density_volume = render_density(network_fn, self.vox_pts, features, network_query_fn).reshape(D,H,W)
         del features
 
-    def decode_batch(self, batch):
+    def decode_batch(self, batch, is_val=False):
         rays = batch['rays'].squeeze()  # (B, 8)
-        rgbs = batch['rgbs'].squeeze()  # (B, 3)
-        return rays, rgbs
+        rgbs = batch['rgbs'].squeeze()  # (B, 3)'
+        ret = (rays, rgbs)
+        if is_val:
+            image_indices = batch['img_index'].squeeze()
+            is_val_item = batch['is_val_item'].squeeze()
+            ret += (image_indices, is_val_item)
+        return ret
 
     def unpreprocess(self, data, shape=(1,1,3,1,1)):
         # to unnormalize image for visualization
@@ -126,14 +134,14 @@ class MVSSystem(LightningModule):
     def train_dataloader(self):
         return DataLoader(self.train_dataset,
                           shuffle=True,
-                          num_workers=8,
+                          num_workers=32,
                           batch_size=args.batch_size,
                           pin_memory=True)
 
     def val_dataloader(self):
         return DataLoader(self.val_dataset,
                           shuffle=False,
-                          num_workers=1,
+                          num_workers=16,
                           batch_size=1,
                           pin_memory=True)
 
@@ -188,18 +196,20 @@ class MVSSystem(LightningModule):
 
         return  {'loss':loss}
 
-
     def validation_step(self, batch, batch_nb):
 
         self.MVSNet.train()
-        rays, img = self.decode_batch(batch)
+        rays, img, img_index, is_item_val = self.decode_batch(batch, is_val=True)
         img = img.cpu()  # (H, W, 3)
         # mask = batch['mask'][0]
 
         N_rays_all = rays.shape[0]
 
         ##################  rendering #####################
-        keys = ['val_psnr_all']
+        if is_item_val:
+            keys = ['val_psnr_all', 'image_index']
+        else:
+            keys = ['train_psnr_all', 'image_index']
         log = init_log({}, keys)
         with torch.no_grad():
 
@@ -237,7 +247,8 @@ class MVSSystem(LightningModule):
             rgbs, depth_r = torch.clamp(torch.cat(rgbs).reshape(H, W, 3),0,1), torch.cat(depth_preds).reshape(H, W)
             img_err_abs = (rgbs - img).abs()
 
-            log['val_psnr_all'] = mse2psnr(torch.mean(img_err_abs ** 2))
+            log[f'{"val" if is_item_val else "train"}_psnr_all'] = mse2psnr(torch.mean(img_err_abs ** 2))
+            log['image_index'] = img_index
             depth_r, _ = visualize_depth(depth_r, self.near_far_source)
             self.logger.experiment.add_images('val/depth_gt_pred', depth_r[None], self.global_step)
 
@@ -249,10 +260,10 @@ class MVSSystem(LightningModule):
             imageio.imwrite(f'runs_fine_tuning/{self.args.expname}/{self.args.expname}/{self.global_step:08d}_{self.idx:02d}.png', (img_vis*255).astype('uint8'))
             self.idx += 1
 
+        # self.log(f"val/img_{img_index}_psnr", log['val_psnr_all'], prog_bar=True)
         return log
 
     def validation_epoch_end(self, outputs):
-
         if self.args.with_depth:
             mean_psnr = torch.stack([x['val_psnr'] for x in outputs]).mean()
             mask_sum = torch.stack([x['mask_sum'] for x in outputs]).sum()
@@ -271,10 +282,32 @@ class MVSSystem(LightningModule):
             self.log(f'val/acc_{self.eval_metric[1]}mm', mean_acc_2mm, prog_bar=False)
             self.log(f'val/acc_{self.eval_metric[2]}mm', mean_acc_4mm, prog_bar=False)
 
-        mean_psnr_all = torch.stack([x['val_psnr_all'] for x in outputs]).mean()
+        mean_psnr_all = torch.stack([x['val_psnr_all'] for x in outputs if 'val_psnr_all' in x]).mean()
         self.log('val/PSNR_all', mean_psnr_all, prog_bar=True)
-        return
 
+        # save psnr scores for each camera poses
+        version_num = -1
+        all_versions = sorted([int(folder.split('_')[-1]) for folder in os.listdir(f'runs_fine_tuning/{self.args.expname}') if 'version' in folder], reverse=True)[0]
+        project_root_path = f'runs_fine_tuning/{self.args.expname}/version_{all_versions}'
+
+        train_res = {}
+        val_res = {}
+        for output in outputs:
+            file_path = self.val_dataset.meta['frames'][int(output['image_index'])]['file_path']
+            if 'train_psnr_all' in output:
+                train_res[file_path] = str(output['train_psnr_all'].item())
+            else:
+                val_res[file_path] = str(output['val_psnr_all'].item())
+
+        # prepare psnrs_train.txt
+        with open(os.path.join(project_root_path, 'psnrs_train.json'), 'w+') as f:
+            json.dump(train_res, f)
+
+        # prepare psnrs_val.txt
+        with open(os.path.join(project_root_path, 'psnrs_val.json'), 'w+') as f:
+            json.dump(val_res, f)
+
+        return
 
     def save_ckpt(self, name='latest'):
         save_dir = f'runs_fine_tuning/{self.args.expname}/ckpts/'
@@ -289,6 +322,7 @@ class MVSSystem(LightningModule):
             ckpt['network_fine_state_dict'] = self.render_kwargs_train['network_fine'].state_dict()
         torch.save(ckpt, path)
         print('Saved checkpoints at', path)
+
 
 if __name__ == '__main__':
     torch.set_default_dtype(torch.float32)
@@ -314,7 +348,7 @@ if __name__ == '__main__':
                       progress_bar_refresh_rate=1,
                       gpus=args.num_gpus,
                       distributed_backend='ddp' if args.num_gpus > 1 else None,
-                      num_sanity_val_steps=1, #if args.num_gpus > 1 else 5,
+                      num_sanity_val_steps=0, #if args.num_gpus > 1 else 5,
                       # check_val_every_n_epoch = max(system.args.num_epochs//system.args.N_vis,1),
                       val_check_interval=500,
                       benchmark=True,

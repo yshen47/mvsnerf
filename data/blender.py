@@ -27,15 +27,41 @@ class BlenderDataset(Dataset):
         self.white_back = True
 
     def read_meta(self):
-        with open(os.path.join(self.root_dir, f"transforms_train.json"), 'r') as f:
-            self.meta = json.load(f)
+        if self.split == 'all':
+            with open(os.path.join(self.root_dir, f"transforms_train.json"), 'r') as f:
+                train_meta = json.load(f)
+
+            with open(os.path.join(self.root_dir, f"transforms_val.json"), 'r') as f:
+                val_meta = json.load(f)
+        else:
+            with open(os.path.join(self.root_dir, f"transforms_{self.split}.json"), 'r') as f:
+                self.meta = json.load(f)
+
+        with open(os.path.join(self.root_dir, f"transforms_new.json"), 'r') as f:
+            new_view_meta = json.load(f)
+            if os.path.exists('configs/new_view.json'):
+                with open("configs/new_view.json", 'r') as f:
+                    
+                self.img_idx = torch.load('configs/pairs.th')[f'{name}_{self.split}']
+                self.meta['frames'] += [new_view_meta['frames'][idx] for idx in self.img_idx]
 
         # sub select training views from pairing file
         if os.path.exists('configs/pairs.th'):
             name = os.path.basename(self.root_dir)
-            self.img_idx = torch.load('configs/pairs.th')[f'{name}_{self.split}']
-            self.meta['frames'] = [self.meta['frames'][idx] for idx in self.img_idx]
-            print(f'===> {self.split}ing index: {self.img_idx}')
+            if self.split != 'all':
+                self.img_idx = torch.load('configs/pairs.th')[f'{name}_{self.split}']
+                self.meta['frames'] = [self.meta['frames'][idx] for idx in self.img_idx]
+                print(f'===> {self.split}ing index: {self.img_idx}')
+            else:
+                train_img_idx = torch.load('configs/pairs.th')[f'{name}_train']
+                train_meta['frames'] = [train_meta['frames'][idx] for idx in train_img_idx]
+
+                val_img_idx = torch.load('configs/pairs.th')[f'{name}_val']
+                val_meta['frames'] = [val_meta['frames'][idx] for idx in val_img_idx]
+                print(f'===> validating index: {val_img_idx}')
+                assert train_meta["camera_angle_x"] == val_meta["camera_angle_x"]
+                self.meta = train_meta
+                self.meta['frames'] += val_meta['frames']
 
         w, h = self.img_wh
         self.focal = 0.5 * 800 / np.tan(0.5 * self.meta['camera_angle_x'])  # original focal length
@@ -55,7 +81,15 @@ class BlenderDataset(Dataset):
         self.all_rays = []
         self.all_rgbs = []
         self.all_masks = []
+        self.item_types = [] # 0 for train, 1 for val
         for frame in self.meta['frames']:
+            file_path = frame['file_path']
+            if 'train' in file_path:
+                self.item_types.append(0)
+            elif 'val' in file_path:
+                self.item_types.append(1)
+            else:
+                raise ValueError
             pose = np.array(frame['transform_matrix']) @ self.blender2opencv
             self.poses += [pose]
             c2w = torch.FloatTensor(pose)
@@ -77,7 +111,6 @@ class BlenderDataset(Dataset):
                                          self.far * torch.ones_like(rays_o[:, :1])],
                                         1)]  # (h*w, 8)
             self.all_masks += []
-
 
         self.poses = np.stack(self.poses)
         if 'train' == self.split:
@@ -109,7 +142,7 @@ class BlenderDataset(Dataset):
 
         imgs, proj_mats = [], []
         intrinsics, c2ws, w2cs = [],[],[]
-        for i,idx in enumerate(pair_idx):
+        for i, idx in enumerate(pair_idx):
             frame = meta['frames'][idx]
             c2w = np.array(frame['transform_matrix']) @ self.blender2opencv
             w2c = np.linalg.inv(c2w)
@@ -177,9 +210,11 @@ class BlenderDataset(Dataset):
 
             img = self.all_rgbs[idx]
             rays = self.all_rays[idx]
-            mask = self.all_masks[idx] # for quantity evaluation
-
+            mask = self.all_masks[idx]      # for quantity evaluation
+            is_val_item = self.item_types[idx]
             sample = {'rays': rays,
                       'rgbs': img,
-                      'mask': mask}
+                      'mask': mask,
+                      'img_index': idx,
+                      'is_val_item': is_val_item}
         return sample
