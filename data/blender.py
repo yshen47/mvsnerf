@@ -5,21 +5,29 @@ import numpy as np
 import os
 from PIL import Image
 from torchvision import transforms as T
-
+import ast
 from .ray_utils import *
 
 
 class BlenderDataset(Dataset):
     def __init__(self, args, split='train', load_ref=False):
         self.args = args
+        self.scene = args.scene
         self.root_dir = args.datadir
         self.split = split
         downsample = args.imgScale_train if split=='train' else args.imgScale_test
         assert int(800*downsample)%32 == 0, \
             f'image width is {int(800*downsample)}, it should be divisible by 32, you may need to modify the imgScale'
-        self.img_wh = (int(800*downsample),int(800*downsample))
+        self.img_wh = (int(800*downsample), int(800*downsample))
         self.define_transforms()
-
+        version_folders = sorted(
+            [int(folder.split('_')[-1]) for folder in os.listdir(f'runs_fine_tuning/{self.args.expname}') if
+             'version' in folder], reverse=True)
+        if len(version_folders) != 0:
+            self.version_num = version_folders[0]
+        else:
+            self.version_num = ""
+        self.project_root_path = f'runs_fine_tuning/{self.args.expname}/version_{self.version_num}'
         self.blender2opencv = np.array([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
         if not load_ref:
             self.read_meta()
@@ -37,13 +45,15 @@ class BlenderDataset(Dataset):
             with open(os.path.join(self.root_dir, f"transforms_{self.split}.json"), 'r') as f:
                 self.meta = json.load(f)
 
-        with open(os.path.join(self.root_dir, f"transforms_new.json"), 'r') as f:
+        with open(os.path.join(f"/data/phi_theta_sample/{self.scene}", f"transforms_train.json"), 'r') as f:
             new_view_meta = json.load(f)
-            if os.path.exists('configs/new_view.json'):
-                with open("configs/new_view.json", 'r') as f:
-                    
-                self.img_idx = torch.load('configs/pairs.th')[f'{name}_{self.split}']
-                self.meta['frames'] += [new_view_meta['frames'][idx] for idx in self.img_idx]
+
+        if self.version_num != '':
+            next_view_indices_pth = os.path.join(self.project_root_path, 'next_view_indices.txt')
+            if os.path.exists(next_view_indices_pth):
+                with open(next_view_indices_pth, 'r') as f:
+                    lines = f.readlines()
+                next_view_indices = lines[-1].strip().split(",")
 
         # sub select training views from pairing file
         if os.path.exists('configs/pairs.th'):
@@ -63,6 +73,18 @@ class BlenderDataset(Dataset):
                 self.meta = train_meta
                 self.meta['frames'] += val_meta['frames']
 
+        if self.version_num != '':
+            new_frames = {}
+            for f in new_view_meta['frames']:
+                file_path = f['file_path'].split('/')[-1]
+                f['file_path'] = "/".join(f['file_path'].split('/')[-2:])
+                new_frames[file_path] = f
+
+            for next_view_index in next_view_indices:
+                self.meta['frames'].append(new_frames[next_view_index])
+
+            print(f'===> new view index: {next_view_indices}')
+
         w, h = self.img_wh
         self.focal = 0.5 * 800 / np.tan(0.5 * self.meta['camera_angle_x'])  # original focal length
         self.focal *= self.img_wh[0] / 800  # modify focal length to match size self.img_wh
@@ -81,20 +103,22 @@ class BlenderDataset(Dataset):
         self.all_rays = []
         self.all_rgbs = []
         self.all_masks = []
-        self.item_types = [] # 0 for train, 1 for val
+        self.item_types = [] # 0 for train, 1 for val, 2 for new
         for frame in self.meta['frames']:
             file_path = frame['file_path']
             if 'train' in file_path:
-                self.item_types.append(0)
+                self.item_types.append('train')
             elif 'val' in file_path:
-                self.item_types.append(1)
+                self.item_types.append('val')
+            elif 'new' in file_path:
+                self.item_types.append('new')
             else:
                 raise ValueError
             pose = np.array(frame['transform_matrix']) @ self.blender2opencv
             self.poses += [pose]
             c2w = torch.FloatTensor(pose)
 
-            image_path = os.path.join(self.root_dir, f"{frame['file_path']}.png")
+            image_path = os.path.join(self.root_dir + "/" + self.item_types[-1] if self.item_types[-1] != 'new' else f"/data/phi_theta_sample/{self.scene}/train", f"{frame['file_path'].split('/')[-1]}.png")
             self.image_paths += [image_path]
             img = Image.open(image_path)
             img = img.resize(self.img_wh, Image.LANCZOS)
@@ -216,5 +240,5 @@ class BlenderDataset(Dataset):
                       'rgbs': img,
                       'mask': mask,
                       'img_index': idx,
-                      'is_val_item': is_val_item}
+                      'item_type': is_val_item}
         return sample

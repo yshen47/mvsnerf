@@ -1,0 +1,3 @@
+[submodule "active_3d_recon"]
+	path = active_3d_recon
+	url = git@github.com:SaraAghajanzadeh/active_3d_recon.git

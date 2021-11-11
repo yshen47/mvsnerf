@@ -1,5 +1,5 @@
 import json
-
+from bo_next_views import bo_for_next_view
 from opt import config_parser
 from torch.utils.data import DataLoader
 
@@ -107,8 +107,8 @@ class MVSSystem(LightningModule):
         ret = (rays, rgbs)
         if is_val:
             image_indices = batch['img_index'].squeeze()
-            is_val_item = batch['is_val_item'].squeeze()
-            ret += (image_indices, is_val_item)
+            item_type = batch['item_type']
+            ret += (image_indices, item_type)
         return ret
 
     def unpreprocess(self, data, shape=(1,1,3,1,1)):
@@ -199,17 +199,14 @@ class MVSSystem(LightningModule):
     def validation_step(self, batch, batch_nb):
 
         self.MVSNet.train()
-        rays, img, img_index, is_item_val = self.decode_batch(batch, is_val=True)
+        rays, img, img_index, item_type = self.decode_batch(batch, is_val=True)
         img = img.cpu()  # (H, W, 3)
         # mask = batch['mask'][0]
 
         N_rays_all = rays.shape[0]
 
         ##################  rendering #####################
-        if is_item_val:
-            keys = ['val_psnr_all', 'image_index']
-        else:
-            keys = ['train_psnr_all', 'image_index']
+        keys = ['psnr_all', 'image_index', 'item_type']
         log = init_log({}, keys)
         with torch.no_grad():
 
@@ -247,8 +244,11 @@ class MVSSystem(LightningModule):
             rgbs, depth_r = torch.clamp(torch.cat(rgbs).reshape(H, W, 3),0,1), torch.cat(depth_preds).reshape(H, W)
             img_err_abs = (rgbs - img).abs()
 
-            log[f'{"val" if is_item_val else "train"}_psnr_all'] = mse2psnr(torch.mean(img_err_abs ** 2))
+            log['psnr_all'] = mse2psnr(torch.mean(img_err_abs ** 2))
+            if 'val' == item_type[0]:
+                log['val_psnr_all'] = mse2psnr(torch.mean(img_err_abs ** 2))
             log['image_index'] = img_index
+            log['item_type'] = item_type[0]
             depth_r, _ = visualize_depth(depth_r, self.near_far_source)
             self.logger.experiment.add_images('val/depth_gt_pred', depth_r[None], self.global_step)
 
@@ -286,18 +286,20 @@ class MVSSystem(LightningModule):
         self.log('val/PSNR_all', mean_psnr_all, prog_bar=True)
 
         # save psnr scores for each camera poses
-        version_num = -1
-        all_versions = sorted([int(folder.split('_')[-1]) for folder in os.listdir(f'runs_fine_tuning/{self.args.expname}') if 'version' in folder], reverse=True)[0]
-        project_root_path = f'runs_fine_tuning/{self.args.expname}/version_{all_versions}'
+        version_num = sorted([int(folder.split('_')[-1]) for folder in os.listdir(f'runs_fine_tuning/{self.args.expname}') if 'version' in folder], reverse=True)[0]
+        project_root_path = f'runs_fine_tuning/{self.args.expname}/version_{version_num}'
 
         train_res = {}
         val_res = {}
+        new_res = {}
         for output in outputs:
-            file_path = self.val_dataset.meta['frames'][int(output['image_index'])]['file_path']
-            if 'train_psnr_all' in output:
-                train_res[file_path] = str(output['train_psnr_all'].item())
-            else:
-                val_res[file_path] = str(output['val_psnr_all'].item())
+            file_path = self.val_dataset.meta['frames'][int(output['image_index'])]['file_path'][2:]
+            if 'train' == output['item_type']:
+                train_res[file_path] = str(output['psnr_all'].item())
+            elif 'val' == output['item_type']:
+                val_res[file_path] = str(output['psnr_all'].item())
+            elif 'new' == output['item_type']:
+                new_res[file_path] = str(output['psnr_all'].item())
 
         # prepare psnrs_train.txt
         with open(os.path.join(project_root_path, 'psnrs_train.json'), 'w+') as f:
@@ -307,7 +309,16 @@ class MVSSystem(LightningModule):
         with open(os.path.join(project_root_path, 'psnrs_val.json'), 'w+') as f:
             json.dump(val_res, f)
 
-        return
+        # prepare psnrs_new.txt
+        with open(os.path.join(project_root_path, 'psnrs_new.json'), 'w+') as f:
+            json.dump(new_res, f)
+
+        # print("Get next view using Bayesian optimization framework\n")
+        bo_for_next_view(self.args.scene)
+
+        dataset = dataset_dict[self.args.dataset_name]
+        self.train_dataset = dataset(args, split='train')
+        self.val_dataset = dataset(args, split='all')
 
     def save_ckpt(self, name='latest'):
         save_dir = f'runs_fine_tuning/{self.args.expname}/ckpts/'
@@ -344,6 +355,7 @@ if __name__ == '__main__':
     trainer = Trainer(max_epochs=args.num_epochs,
                       checkpoint_callback=checkpoint_callback,
                       logger=logger,
+                      reload_dataloaders_every_epoch=True,
                       weights_summary=None,
                       progress_bar_refresh_rate=1,
                       gpus=args.num_gpus,

@@ -11,6 +11,7 @@ def config_parser(cmd=None):
     parser.add_argument("--datadir", type=str, default='./data/llff/fern',
                         help='input data directory')
     parser.add_argument('--with_depth', action='store_true')
+    parser.add_argument('--scene', default='lego', type=str)
     parser.add_argument('--with_depth_loss', action='store_true')
     parser.add_argument('--with_rgb_loss', action='store_true')
     parser.add_argument('--imgScale_train', type=float, default=1.0)
