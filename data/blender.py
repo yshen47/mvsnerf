@@ -82,9 +82,11 @@ class BlenderDataset(Dataset):
 
             for next_view_index in next_view_indices:
                 self.meta['frames'].append(new_frames[next_view_index])
-
-            print(f'===> new view index: {next_view_indices}')
-
+            self.next_view_indices = next_view_indices
+            if self.split != 'val':
+                print(f'===> new view index: {next_view_indices}')
+        else:
+            self.next_view_indices = []
         w, h = self.img_wh
         self.focal = 0.5 * 800 / np.tan(0.5 * self.meta['camera_angle_x'])  # original focal length
         self.focal *= self.img_wh[0] / 800  # modify focal length to match size self.img_wh

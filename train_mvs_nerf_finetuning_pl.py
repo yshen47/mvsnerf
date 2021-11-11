@@ -293,7 +293,9 @@ class MVSSystem(LightningModule):
         val_res = {}
         new_res = {}
         for output in outputs:
-            file_path = self.val_dataset.meta['frames'][int(output['image_index'])]['file_path'][2:]
+            file_path = self.val_dataset.meta['frames'][int(output['image_index'])]['file_path']
+            if './' == file_path[:2]:
+                file_path = file_path[2:]
             if 'train' == output['item_type']:
                 train_res[file_path] = str(output['psnr_all'].item())
             elif 'val' == output['item_type']:
@@ -314,7 +316,8 @@ class MVSSystem(LightningModule):
             json.dump(new_res, f)
 
         # print("Get next view using Bayesian optimization framework\n")
-        bo_for_next_view(self.args.scene)
+        prev_indices = self.train_dataset.next_view_indices
+        bo_for_next_view(self.args.scene, prev_indices)
 
         dataset = dataset_dict[self.args.dataset_name]
         self.train_dataset = dataset(args, split='train')
@@ -362,7 +365,7 @@ if __name__ == '__main__':
                       distributed_backend='ddp' if args.num_gpus > 1 else None,
                       num_sanity_val_steps=0, #if args.num_gpus > 1 else 5,
                       # check_val_every_n_epoch = max(system.args.num_epochs//system.args.N_vis,1),
-                      val_check_interval=500,
+                      val_check_interval=50,
                       benchmark=True,
                       precision=16 if args.use_amp else 32,
                       amp_level='O1')

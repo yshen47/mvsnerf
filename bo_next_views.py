@@ -6,7 +6,7 @@ import copy
 from scipy.stats import norm
 
 
-def bo_for_next_view(scene, n_runs=10, gamma=0.2, lam_kde=20, lam_gp=50, scatter_offset=1.02):
+def bo_for_next_view(scene, prev_indices, n_runs=10, gamma=0.2, lam_kde=20, lam_gp=50, scatter_offset=1.02):
     def load_transform(path):
         with open(path, 'r') as f:
             orig_transforms = json.load(f)
@@ -97,16 +97,9 @@ def bo_for_next_view(scene, n_runs=10, gamma=0.2, lam_kde=20, lam_gp=50, scatter
 
     perf = normalize_psnrs(merged_train_psnrs, train_key_order)
 
-    val_key_order = list(orig_val_set_transforms.keys())
-    val_key_order.sort()
-    xyzv = prepare_cam_centers(orig_val_set_transforms, val_key_order)
-    perfv = normalize_psnrs(orig_val_set_psnrs, val_key_order)
     new_set_key_order = list(new_set_transforms.keys())
     new_set_key_order.sort()
     xyz_next = prepare_cam_centers(new_set_transforms, new_set_key_order)
-    xn_3d = xyz_next[:, 0]
-    yn_3d = xyz_next[:, 1]
-    zn_3d = xyz_next[:, 2]
 
     # spherical gaussian kernel
     def kernel_func(A, B, lam=50):
@@ -130,8 +123,10 @@ def bo_for_next_view(scene, n_runs=10, gamma=0.2, lam_kde=20, lam_gp=50, scatter
         return m2, C2
 
     inds = []
+    for prev_index in prev_indices:
+        inds.append(int(prev_index.split('_')[-1]))
 
-    for i in range(n_runs):
+    while n_runs:
         # run BO
         # print(f'Number of Optimization run: {i}')
         # get initial data ready
@@ -154,7 +149,9 @@ def bo_for_next_view(scene, n_runs=10, gamma=0.2, lam_kde=20, lam_gp=50, scatter
         E_final = E_perf + gamma * E_track
         # Result
         ind = np.argmin(E_final)
-        inds.append(ind)
+        if ind not in inds:
+            n_runs -= 1
+            inds.append(ind)
         xyz_next_sample = np.expand_dims(xyz_next[ind], axis=0)
         print('m2 ind: ', m2[ind])
         psnr_next_sample = m2[ind] + 0.5
@@ -165,6 +162,7 @@ def bo_for_next_view(scene, n_runs=10, gamma=0.2, lam_kde=20, lam_gp=50, scatter
         perf = np.concatenate((perf, np.array([psnr_next_sample])))
 
     inds = [new_set_key_order[ind].split('/')[-1] for ind in inds]
+    inds.sort()
     with open(os.path.join(mvs_nerf_experiment_folder, 'next_view_indices.txt'), 'a+') as f:
         f.write(",".join(inds) + '\n')
 
