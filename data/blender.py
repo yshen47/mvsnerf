@@ -20,9 +20,11 @@ class BlenderDataset(Dataset):
             f'image width is {int(800*downsample)}, it should be divisible by 32, you may need to modify the imgScale'
         self.img_wh = (int(800*downsample), int(800*downsample))
         self.define_transforms()
-        version_folders = sorted(
-            [int(folder.split('_')[-1]) for folder in os.listdir(f'runs_fine_tuning/{self.args.expname}') if
-             'version' in folder], reverse=True)
+        version_folders = []
+        if os.path.exists(f'runs_fine_tuning/{self.args.expname}'):
+            version_folders = sorted(
+                [int(folder.split('_')[-1]) for folder in os.listdir(f'runs_fine_tuning/{self.args.expname}') if
+                 'version' in folder], reverse=True)
         if len(version_folders) != 0:
             self.version_num = version_folders[0]
         else:
