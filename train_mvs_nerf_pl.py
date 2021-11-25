@@ -12,12 +12,12 @@ from utils import *
 # optimizer, scheduler, visualization
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
-
 # pytorch-lightning
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning import LightningModule, Trainer, loggers
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 class SL1Loss(nn.Module):
     def __init__(self, levels=3):
@@ -30,6 +30,7 @@ class SL1Loss(nn.Module):
             mask = depth_gt > 0
         loss = self.loss(depth_pred[mask], depth_gt[mask]) * 2 ** (1 - 2)
         return loss
+
 
 class MVSSystem(LightningModule):
     def __init__(self, args):
@@ -123,7 +124,6 @@ class MVSSystem(LightningModule):
         rgb, disp, acc, depth_pred, alpha, ret = rendering(args, pose_ref, rays_pts, rays_NDC, depth_candidates, rays_o, rays_dir,
                                                        volume_feature, imgs[:, :-1], img_feat=None,  **self.render_kwargs_train)
 
-
         if self.args.with_depth:
             mask = rays_depth > 0
             if self.args.with_depth_loss:
@@ -148,7 +148,6 @@ class MVSSystem(LightningModule):
             self.log('train/PSNR_coarse', psnr.item(), prog_bar=True)
             loss = loss + img_loss_coarse
 
-
         if args.with_depth:
             psnr = mse2psnr(img2mse(rgb.cpu()[mask], target_s.cpu()[mask]))
             psnr_out = mse2psnr(img2mse(rgb.cpu()[~mask], target_s.cpu()[~mask]))
@@ -163,17 +162,11 @@ class MVSSystem(LightningModule):
 
         if self.global_step % 20000==19999:
             self.save_ckpt(f'{self.global_step}')
-
-
-        return  {'loss':loss}
-
-
+        return {'loss': loss}
 
     def validation_step(self, batch, batch_nb):
-
         if 'scan' in batch.keys():
             batch.pop('scan')
-
         log = {}
         data_mvs, pose_ref = self.decode_batch(batch)
         imgs, proj_mats = data_mvs['images'], data_mvs['proj_mats']
@@ -218,11 +211,8 @@ class MVSSystem(LightningModule):
             else:
                 log['val_psnr'] = mse2psnr(torch.mean(img_err_abs**2))
 
-
             if self.args.with_depth:
-
                 log['val_depth_loss_r'] = self.loss(depth_r, depth_gt_render, mask)
-
                 minmax = [2.0,6.0]
                 depth_gt_render_vis,_ = visualize_depth(depth_gt_render,minmax)
                 depth_pred_r_, _ = visualize_depth(depth_r, minmax)
@@ -254,8 +244,6 @@ class MVSSystem(LightningModule):
         return log
 
     def validation_epoch_end(self, outputs):
-
-
         mean_psnr = torch.stack([x['val_psnr'] for x in outputs]).mean()
         mask_sum = torch.stack([x['mask_sum'] for x in outputs]).sum()
         mean_d_loss_r = torch.stack([x['val_depth_loss_r'] for x in outputs]).mean()
@@ -270,9 +258,7 @@ class MVSSystem(LightningModule):
         self.log(f'val/acc_{self.eval_metric[0]}mm', mean_acc_1mm, prog_bar=False)
         self.log(f'val/acc_{self.eval_metric[1]}mm', mean_acc_2mm, prog_bar=False)
         self.log(f'val/acc_{self.eval_metric[2]}mm', mean_acc_4mm, prog_bar=False)
-
         return
-
 
     def save_ckpt(self, name='latest'):
         save_dir = f'runs_new/{self.args.expname}/ckpts/'

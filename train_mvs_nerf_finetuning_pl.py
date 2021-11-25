@@ -1,8 +1,10 @@
 import json
-from bo_next_views import bo_for_next_view
+import os.path
+
+from next_view_selection import *
 from opt import config_parser
 from torch.utils.data import DataLoader
-
+from pathlib import Path
 from data import dataset_dict
 
 # models
@@ -254,7 +256,7 @@ class MVSSystem(LightningModule):
 
             img_vis = torch.stack((img, rgbs, img_err_abs.cpu()*5)).permute(0,3,1,2)
             self.logger.experiment.add_images('val/rgb_pred_err', img_vis, self.global_step)
-            os.makedirs(f'runs_fine_tuning/{self.args.expname}/{self.args.expname}/',exist_ok=True)
+            os.makedirs(f'runs_fine_tuning/{self.args.expname}/{self.args.expname}/', exist_ok=True)
 
             img_vis = torch.cat((img,rgbs,img_err_abs*10,depth_r.permute(1,2,0)),dim=1).numpy()
             imageio.imwrite(f'runs_fine_tuning/{self.args.expname}/{self.args.expname}/{self.global_step:08d}_{self.idx:02d}.png', (img_vis*255).astype('uint8'))
@@ -302,26 +304,43 @@ class MVSSystem(LightningModule):
                 val_res[file_path] = str(output['psnr_all'].item())
             elif 'new' == output['item_type']:
                 new_res[file_path] = str(output['psnr_all'].item())
+        root_path = Path(project_root_path)
+
+        curr_psnrs_ind = 0
+        if len(list(root_path.glob('psnrs_train_*.json'))) > 0:
+            latest_psnrs_train = sorted(root_path.glob('psnrs_train_*.json'))[-1]
+            curr_psnrs_ind = int(str(latest_psnrs_train).split('_')[-1][:-5]) + 1
 
         # prepare psnrs_train.txt
-        with open(os.path.join(project_root_path, 'psnrs_train.json'), 'w+') as f:
+        with open(os.path.join(project_root_path, 'psnrs_train_{:03d}.json'.format(curr_psnrs_ind)), 'w+') as f:
             json.dump(train_res, f)
 
         # prepare psnrs_val.txt
-        with open(os.path.join(project_root_path, 'psnrs_val.json'), 'w+') as f:
+        with open(os.path.join(project_root_path, 'psnrs_val_{:03d}.json'.format(curr_psnrs_ind)), 'w+') as f:
             json.dump(val_res, f)
 
         # prepare psnrs_new.txt
-        with open(os.path.join(project_root_path, 'psnrs_new.json'), 'w+') as f:
+        with open(os.path.join(project_root_path, 'psnrs_new_{:03d}.json'.format(curr_psnrs_ind)), 'w+') as f:
             json.dump(new_res, f)
 
         # print("Get next view using Bayesian optimization framework\n")
-        prev_indices = self.train_dataset.next_view_indices
-        bo_for_next_view(self.args.scene, prev_indices)
+        if self.args.view_selection_method == 'bo':
+            prev_indices = self.train_dataset.next_view_indices
+            bo_for_next_view(self.args.expname, self.args.scene, prev_indices)
 
-        dataset = dataset_dict[self.args.dataset_name]
-        self.train_dataset = dataset(args, split='train')
-        self.val_dataset = dataset(args, split='all')
+            dataset = dataset_dict[self.args.dataset_name]
+            self.train_dataset = dataset(args, split='train')
+            self.val_dataset = dataset(args, split='all')
+        elif self.args.view_selection_method == 'none':
+            pass
+        elif self.args.view_selection_method == 'random':
+            prev_indices = self.train_dataset.next_view_indices
+            random_for_next_view(self.args.expname, self.args.scene, prev_indices)
+            dataset = dataset_dict[self.args.dataset_name]
+            self.train_dataset = dataset(args, split='train')
+            self.val_dataset = dataset(args, split='all')
+        else:
+            raise NotImplementedError()
 
     def save_ckpt(self, name='latest'):
         save_dir = f'runs_fine_tuning/{self.args.expname}/ckpts/'
@@ -341,6 +360,7 @@ class MVSSystem(LightningModule):
 if __name__ == '__main__':
     torch.set_default_dtype(torch.float32)
     args = config_parser()
+    args.expname += "-" + args.view_selection_method
     system = MVSSystem(args)
     checkpoint_callback = ModelCheckpoint(os.path.join(f'runs_fine_tuning/{args.expname}/ckpts/','{epoch:02d}'),
                                           monitor='val/PSNR',
@@ -365,7 +385,7 @@ if __name__ == '__main__':
                       distributed_backend='ddp' if args.num_gpus > 1 else None,
                       num_sanity_val_steps=0, #if args.num_gpus > 1 else 5,
                       # check_val_every_n_epoch = max(system.args.num_epochs//system.args.N_vis,1),
-                      val_check_interval=500,
+                      val_check_interval=1000,
                       benchmark=True,
                       precision=16 if args.use_amp else 32,
                       amp_level='O1')

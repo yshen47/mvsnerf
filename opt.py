@@ -6,6 +6,8 @@ def config_parser(cmd=None):
                         help='config file path')
     parser.add_argument("--expname", type=str,
                         help='experiment name')
+    parser.add_argument("--view_selection_method", type=str,
+                        help='bo, none, random')
     parser.add_argument("--basedir", type=str, default='./logs/',
                         help='where to store ckpts and logs')
     parser.add_argument("--datadir", type=str, default='./data/llff/fern',
@@ -21,7 +23,7 @@ def config_parser(cmd=None):
 
     # loader options
     parser.add_argument("--batch_size", type=int, default=1024)
-    parser.add_argument("--num_epochs", type=int, default=8)
+    parser.add_argument("--num_epochs", type=int, default=1)
     parser.add_argument("--pts_dim", type=int, default=3)
     parser.add_argument("--dir_dim", type=int, default=3)
     parser.add_argument("--alpha_feat_dim", type=int, default=8)
