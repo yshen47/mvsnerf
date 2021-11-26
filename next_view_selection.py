@@ -8,7 +8,7 @@ from pathlib import Path
 from scipy.stats import norm
 
 
-def bo_for_next_view(exp_name, scene, prev_indices, n_runs=10, gamma=0.2, lam_kde=20, lam_gp=50, scatter_offset=1.02):
+def bo_for_next_view(exp_name, scene, prev_indices, n_runs=5, gamma=0.2, lam_kde=20, lam_gp=50, scatter_offset=1.02):
     def load_transform(path):
         with open(path, 'r') as f:
             orig_transforms = json.load(f)
@@ -102,14 +102,14 @@ def bo_for_next_view(exp_name, scene, prev_indices, n_runs=10, gamma=0.2, lam_kd
 
     orig_keys = []
     new_keys = []
-    new_key_prefix = ''
-    orig_key_prefix = ''
+    new_key_prefix = list(new_set_transforms.keys())[0].split('/')[0]
+    orig_key_prefix = 'train'
     for k in list(merged_train_set_transforms.keys()):
         if 'new_results' in k:
-            new_key_prefix = '/'.join(k.split('/')[:-1])
+            # new_key_prefix = '/'.join(k.split('/')[:-1])
             new_keys.append(int(k.split('/')[-1][2:]))
         else:
-            orig_key_prefix = '/'.join(k.split('/')[:-1])
+            # orig_key_prefix = '/'.join(k.split('/')[:-1])
             orig_keys.append(int(k.split('/')[-1][2:]))
     orig_keys.sort()
     new_keys.sort()
@@ -188,7 +188,7 @@ def bo_for_next_view(exp_name, scene, prev_indices, n_runs=10, gamma=0.2, lam_kd
         f.write(",".join(inds) + '\n')
 
 
-def random_for_next_view(exp_name, scene, prev_indices, n_runs=10, gamma=0.2, lam_kde=20, lam_gp=50, scatter_offset=1.02):
+def random_for_next_view(exp_name, scene, prev_indices, n_runs=5, gamma=0.2, lam_kde=20, lam_gp=50, scatter_offset=1.02):
 
     def load_transform(path):
         with open(path, 'r') as f:
@@ -261,7 +261,8 @@ def random_for_next_view(exp_name, scene, prev_indices, n_runs=10, gamma=0.2, la
     candidates = list(np.arange(len(new_set_transforms)))
     for prev_index in prev_indices:
         inds.append(int(prev_index.split('_')[-1]))
-        candidates.remove(inds[-1])
+        if inds[-1] in candidates:
+            candidates.remove(inds[-1])
     inds += random.choices(candidates, k=n_runs)
     inds = [new_set_key_order[ind].split('/')[-1] for ind in inds]
     inds.sort()
