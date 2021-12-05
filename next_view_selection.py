@@ -8,7 +8,20 @@ from pathlib import Path
 from scipy.stats import norm
 
 
-def bo_for_next_view(exp_name, scene, prev_indices, n_runs=5, gamma=0.2, lam_kde=20, lam_gp=50, scatter_offset=1.02):
+# prepare cam_centers (cam2world)
+def prepare_cam_centers(transforms, key_order):
+    zero = np.array([0, 0, 0])
+    new_pts = []
+    for k in key_order:
+        pose = transforms[k]
+        cam_center_in_world = np.matmul(pose[:3, :3], zero) + pose[:3, 3]
+        new_pts.append(cam_center_in_world)
+    xyz = np.stack(new_pts)
+    xyz = xyz / np.expand_dims(np.linalg.norm(xyz, axis=1), axis=1)
+    return xyz
+
+
+def bo_for_next_view(exp_name, scene, prev_indices, avg_val_camera_center, n_runs=5, gamma=0.2, lam_kde=20, lam_gp=50, scatter_offset=1.02, trust_region_radius=0.6):
     def load_transform(path):
         with open(path, 'r') as f:
             orig_transforms = json.load(f)
@@ -45,9 +58,6 @@ def bo_for_next_view(exp_name, scene, prev_indices, n_runs=5, gamma=0.2, lam_kde
     orig_train_set_psnr_pth = os.path.join(mvs_nerf_experiment_folder, 'psnrs_train_{:03d}.json'.format(curr_psnrs_ind))
     orig_train_set_psnrs = load_psnrs(orig_train_set_psnr_pth)
 
-    orig_val_set_psnr_pth = os.path.join(mvs_nerf_experiment_folder, 'psnrs_val_{:03d}.json'.format(curr_psnrs_ind))
-    orig_val_set_psnrs = load_psnrs(orig_val_set_psnr_pth)
-
     new_set_psnr_pth = os.path.join(mvs_nerf_experiment_folder, 'psnrs_new_{:03d}.json'.format(curr_psnrs_ind))
     new_set_psnrs = load_psnrs(new_set_psnr_pth)
 
@@ -65,26 +75,6 @@ def bo_for_next_view(exp_name, scene, prev_indices, n_runs=5, gamma=0.2, lam_kde
 
     for k in k_to_removed:
         del merged_train_set_transforms[k]
-
-    k_to_removed = []
-    for k in orig_val_set_transforms:
-        if k not in orig_val_set_psnrs:
-            k_to_removed.append(k)
-
-    for k in k_to_removed:
-        del orig_val_set_transforms[k]
-
-    # prepare cam_centers (cam2world)
-    def prepare_cam_centers(transforms, key_order):
-        zero = np.array([0, 0, 0])
-        new_pts = []
-        for k in key_order:
-            pose = transforms[k]
-            cam_center_in_world = np.matmul(pose[:3, :3], zero) + pose[:3, 3]
-            new_pts.append(cam_center_in_world)
-        xyz = np.stack(new_pts)
-        xyz = xyz / np.expand_dims(np.linalg.norm(xyz, axis=1), axis=1)
-        return xyz
 
     def normalize_psnrs(psnrs, key_order):
         psnrs_list = []
@@ -121,7 +111,8 @@ def bo_for_next_view(exp_name, scene, prev_indices, n_runs=5, gamma=0.2, lam_kde
 
     new_set_key_order = [new_key_prefix + "/r_" + str(item) for item in list(np.arange(len(new_set_transforms)))]
     xyz_next = prepare_cam_centers(new_set_transforms, new_set_key_order)
-
+    distances = np.linalg.norm(xyz_next - avg_val_camera_center, axis=1)
+    trust_region_valid_indices = np.where(distances < trust_region_radius)[0]
     # spherical gaussian kernel
     def kernel_func(A, B, lam=50):
         # A=Nx3, B=Mx3
@@ -169,7 +160,12 @@ def bo_for_next_view(exp_name, scene, prev_indices, n_runs=5, gamma=0.2, lam_kde
         E_perf = EI
         E_final = E_perf + gamma * E_track
         # Result
-        ind = np.argmin(E_final)
+        sorted_ind = np.argsort(E_final)
+        ind = None
+        for index in sorted_ind:
+            if index in trust_region_valid_indices:
+                ind = index
+                break
         if ind not in inds:
             n_runs -= 1
             inds.append(ind)
@@ -188,7 +184,7 @@ def bo_for_next_view(exp_name, scene, prev_indices, n_runs=5, gamma=0.2, lam_kde
         f.write(",".join(inds) + '\n')
 
 
-def random_for_next_view(exp_name, scene, prev_indices, n_runs=5, gamma=0.2, lam_kde=20, lam_gp=50, scatter_offset=1.02):
+def random_for_next_view(exp_name, scene, prev_indices, avg_val_camera_center, n_runs=5, gamma=0.2, lam_kde=20, lam_gp=50, scatter_offset=1.02, trust_region_radius=0.6):
 
     def load_transform(path):
         with open(path, 'r') as f:
@@ -198,7 +194,6 @@ def random_for_next_view(exp_name, scene, prev_indices, n_runs=5, gamma=0.2, lam
         return res
 
     orig_train_set_transforms = load_transform(f'/data/original_nerf_synthetic/{scene}/transforms_train.json')
-    orig_val_set_transforms = load_transform(f'/data/original_nerf_synthetic/{scene}/transforms_val.json')
     new_set_transforms = load_transform(f'/data/phi_theta_sample/{scene}/transforms_train.json')
 
     last_version = sorted(
@@ -226,9 +221,6 @@ def random_for_next_view(exp_name, scene, prev_indices, n_runs=5, gamma=0.2, lam
     orig_train_set_psnr_pth = os.path.join(mvs_nerf_experiment_folder, 'psnrs_train_{:03d}.json'.format(curr_psnrs_ind))
     orig_train_set_psnrs = load_psnrs(orig_train_set_psnr_pth)
 
-    orig_val_set_psnr_pth = os.path.join(mvs_nerf_experiment_folder, 'psnrs_val_{:03d}.json'.format(curr_psnrs_ind))
-    orig_val_set_psnrs = load_psnrs(orig_val_set_psnr_pth)
-
     new_set_psnr_pth = os.path.join(mvs_nerf_experiment_folder, 'psnrs_new_{:03d}.json'.format(curr_psnrs_ind))
     new_set_psnrs = load_psnrs(new_set_psnr_pth)
 
@@ -247,18 +239,13 @@ def random_for_next_view(exp_name, scene, prev_indices, n_runs=5, gamma=0.2, lam
     for k in k_to_removed:
         del merged_train_set_transforms[k]
 
-    k_to_removed = []
-    for k in orig_val_set_transforms:
-        if k not in orig_val_set_psnrs:
-            k_to_removed.append(k)
-
-    for k in k_to_removed:
-        del orig_val_set_transforms[k]
-
     new_set_key_order = ["/r_" + str(item) for item in list(np.arange(len(new_set_transforms)))]
-
+    xyz_next = prepare_cam_centers(new_set_transforms, new_set_key_order)
     inds = []
-    candidates = list(np.arange(len(new_set_transforms)))
+    distances = np.linalg.norm(xyz_next - avg_val_camera_center, axis=1)
+    trust_region_valid_indices = np.where(distances < trust_region_radius)[0]
+
+    candidates = trust_region_valid_indices
     for prev_index in prev_indices:
         inds.append(int(prev_index.split('_')[-1]))
         if inds[-1] in candidates:

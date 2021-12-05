@@ -15,6 +15,7 @@ class BlenderDataset(Dataset):
         self.scene = args.scene
         self.root_dir = args.datadir
         self.split = split
+        self.avg_val_camera_center = None
         downsample = args.imgScale_train if split=='train' else args.imgScale_test
         assert int(800*downsample)%32 == 0, \
             f'image width is {int(800*downsample)}, it should be divisible by 32, you may need to modify the imgScale'
@@ -68,8 +69,20 @@ class BlenderDataset(Dataset):
                 train_img_idx = torch.load('configs/pairs.th')[f'{name}_train']
                 train_meta['frames'] = [train_meta['frames'][idx] for idx in train_img_idx]
 
+                def prepare_cam_center(transforms):
+                    zero = np.array([0, 0, 0])
+                    pose = transforms
+                    xyz = np.matmul(pose[:3, :3], zero) + pose[:3, 3]
+                    xyz = xyz / np.linalg.norm(xyz)
+                    return xyz
+
                 val_img_idx = torch.load('configs/pairs.th')[f'{name}_val']
                 val_meta['frames'] = [val_meta['frames'][idx] for idx in val_img_idx]
+                avg_val_camera_center = np.zeros(3)   #later use to mask new_transform indices so that only new samples will be only selected from a ball trust region
+                for frame in val_meta['frames']:
+                    avg_val_camera_center += prepare_cam_center(np.array(frame['transform_matrix']))
+                avg_val_camera_center /= len(val_meta['frames'])
+                self.avg_val_camera_center = avg_val_camera_center
                 print(f'===> validating index: {val_img_idx}')
                 assert train_meta["camera_angle_x"] == val_meta["camera_angle_x"]
                 self.meta = train_meta

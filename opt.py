@@ -1,5 +1,6 @@
 import configargparse
 
+
 def config_parser(cmd=None):
     parser = configargparse.ArgumentParser()
     parser.add_argument('--config', is_config_file=True,

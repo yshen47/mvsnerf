@@ -56,6 +56,7 @@ class MVSSystem(LightningModule):
         dataset = dataset_dict[self.args.dataset_name]
         self.train_dataset = dataset(args, split='train')
         self.val_dataset = dataset(args, split='all') # previously is val
+        self.avg_val_camera_center = self.val_dataset.avg_val_camera_center
         self.init_volume()
         self.grad_vars += list(self.volume.parameters())
 
@@ -326,7 +327,7 @@ class MVSSystem(LightningModule):
         # print("Get next view using Bayesian optimization framework\n")
         if self.args.view_selection_method == 'bo':
             prev_indices = self.train_dataset.next_view_indices
-            bo_for_next_view(self.args.expname, self.args.scene, prev_indices)
+            bo_for_next_view(self.args.expname, self.args.scene, prev_indices, self.avg_val_camera_center)
 
             dataset = dataset_dict[self.args.dataset_name]
             self.train_dataset = dataset(args, split='train')
