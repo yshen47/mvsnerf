@@ -247,7 +247,7 @@ def random_for_next_view(exp_name, scene, prev_indices, avg_val_camera_center, n
     distances = np.linalg.norm(xyz_next - avg_val_camera_center, axis=1)
     trust_region_valid_indices = np.where(distances < trust_region_radius)[0]
 
-    candidates = trust_region_valid_indices
+    candidates = list(trust_region_valid_indices)
     for prev_index in prev_indices:
         inds.append(int(prev_index.split('_')[-1]))
         if inds[-1] in candidates:
