@@ -239,7 +239,9 @@ def random_for_next_view(exp_name, scene, prev_indices, avg_val_camera_center, n
     for k in k_to_removed:
         del merged_train_set_transforms[k]
 
-    new_set_key_order = ["/r_" + str(item) for item in list(np.arange(len(new_set_transforms)))]
+    new_key_prefix = list(new_set_transforms.keys())[0].split('/')[0]
+    new_set_key_order = [new_key_prefix + "/r_" + str(item) for item in list(np.arange(len(new_set_transforms)))]
+    # new_set_key_order = ["/r_" + str(item) for item in list(np.arange(len(new_set_transforms)))]
     xyz_next = prepare_cam_centers(new_set_transforms, new_set_key_order)
     inds = []
     distances = np.linalg.norm(xyz_next - avg_val_camera_center, axis=1)
