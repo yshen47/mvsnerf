@@ -336,7 +336,7 @@ class MVSSystem(LightningModule):
             pass
         elif self.args.view_selection_method == 'random':
             prev_indices = self.train_dataset.next_view_indices
-            random_for_next_view(self.args.expname, self.args.scene, prev_indices)
+            random_for_next_view(self.args.expname, self.args.scene, prev_indices, self.avg_val_camera_center)
             dataset = dataset_dict[self.args.dataset_name]
             self.train_dataset = dataset(args, split='train')
             self.val_dataset = dataset(args, split='all')
